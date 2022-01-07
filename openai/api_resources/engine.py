@@ -1,10 +1,7 @@
 import time
 
 from openai import util
-from openai.api_resources.abstract import (
-    ListableAPIResource,
-    UpdateableAPIResource,
-)
+from openai.api_resources.abstract import ListableAPIResource, UpdateableAPIResource
 from openai.error import TryAgain
 
 
@@ -30,3 +27,6 @@ class Engine(ListableAPIResource, UpdateableAPIResource):
 
     def search(self, **params):
         return self.request("post", self.instance_url() + "/search", params)
+
+    def embeddings(self, **params):
+        return self.request("post", self.instance_url() + "/embeddings", params)
