@@ -176,7 +176,12 @@ class OpenAIObject(dict):
             organization=self.organization,
         )
         response, stream, api_key = requestor.request(
-            method, url, params, stream=stream, headers=headers, request_id=request_id
+            method,
+            url,
+            params=params,
+            stream=stream,
+            headers=headers,
+            request_id=request_id,
         )
 
         if stream:
@@ -243,7 +248,11 @@ class OpenAIObject(dict):
 
     @property
     def typed_api_type(self):
-        return ApiType.from_str(self.api_type) if self.api_type else ApiType.from_str(openai.api_type)
+        return (
+            ApiType.from_str(self.api_type)
+            if self.api_type
+            else ApiType.from_str(openai.api_type)
+        )
 
     # This class overrides __setitem__ to throw exceptions on inputs that it
     # doesn't like. This can cause problems when we try to copy an object

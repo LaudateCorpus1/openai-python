@@ -9,6 +9,7 @@ from typing import Optional
 import requests
 
 import openai
+import openai.wandb_logger
 from openai.upload_progress import BufferReader
 from openai.validators import (
     apply_necessary_remediation,
@@ -19,7 +20,6 @@ from openai.validators import (
     write_out_file,
     write_out_search_file,
 )
-import openai.wandb_logger
 
 
 class bcolors:
@@ -266,11 +266,11 @@ class Search:
         )
 
     @classmethod
-    def create_alpha(cls, args):
-        resp = openai.Search.create_alpha(
-            query=[args.query],
-            max_documents=args.max_documents,
-            file_id=args.file,
+    def create(cls, args):
+        resp = openai.Search.create(
+            query=args.query,
+            documents=args.documents,
+            model=args.model,
         )
         print(resp)
 
@@ -320,7 +320,7 @@ class FineTune:
                 sys.stdout.write(
                     "Found potentially duplicated files with name '{name}', purpose 'fine-tune' and size {size} bytes\n".format(
                         name=os.path.basename(matching_files[0]["filename"]),
-                        size=matching_files[0]["bytes"],
+                        size=matching_files[0]["bytes"] if "bytes" in matching_files[0] else matching_files[0]["size"],
                     )
                 )
                 sys.stdout.write("\n".join(file_ids))
@@ -394,6 +394,7 @@ class FineTune:
 
         for hparam in (
             "model",
+            "suffix",
             "n_epochs",
             "batch_size",
             "learning_rate_multiplier",
@@ -826,20 +827,14 @@ Mutually exclusive with `top_p`.""",
     sub.set_defaults(func=File.list)
 
     # Search
-    sub = subparsers.add_parser("search.create_alpha")
+    sub = subparsers.add_parser("search.create")
 
     sub.add_argument(
-        "-f",
-        "--file",
-        required=True,
-        help="ID for previously uploaded file that contains the documents you want to search",
-    )
-    sub.add_argument(
-        "-m",
-        "--max_documents",
-        help="The maximum number of documents to return",
-        type=int,
-        default=200,
+        "-d",
+        "--documents",
+        help="Documents to search over",
+        type=str,
+        nargs="+",
     )
     sub.add_argument(
         "-q",
@@ -847,7 +842,12 @@ Mutually exclusive with `top_p`.""",
         required=True,
         help="Search query",
     )
-    sub.set_defaults(func=Search.create_alpha)
+    sub.add_argument(
+        "-m",
+        "--model",
+        help="The model to search with",
+    )
+    sub.set_defaults(func=Search.create)
 
     # Finetune
     sub = subparsers.add_parser("fine_tunes.list")
@@ -879,6 +879,17 @@ Mutually exclusive with `top_p`.""",
         "-m",
         "--model",
         help="The model to start fine-tuning from",
+    )
+    sub.add_argument(
+        "--suffix",
+        help="If set, this argument can be used to customize the generated fine-tuned model name."
+        "All punctuation and whitespace in `suffix` will be replaced with a "
+        "single dash, and the string will be lower cased. The max "
+        "length of `suffix` is 40 chars. "
+        "The generated name will match the form `{base_model}:ft-{org-title}:{suffix}-{timestamp}`. "
+        'For example, `openai api fine_tunes.create -t test.jsonl -m ada --suffix "custom model name" '
+        "could generate a model with the name "
+        "ada:ft-your-org:custom-model-name-2022-02-15-04-21-04",
     )
     sub.add_argument(
         "--no_follow",

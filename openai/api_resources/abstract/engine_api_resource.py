@@ -1,5 +1,5 @@
-from pydoc import apropos
 import time
+from pydoc import apropos
 from typing import Optional
 from urllib.parse import quote_plus
 
@@ -15,39 +15,50 @@ MAX_TIMEOUT = 20
 class EngineAPIResource(APIResource):
     engine_required = True
     plain_old_data = False
-    azure_api_prefix = 'openai/deployments'
 
     def __init__(self, engine: Optional[str] = None, **kwargs):
         super().__init__(engine=engine, **kwargs)
 
     @classmethod
-    def class_url(cls, engine: Optional[str] = None, api_type : Optional[str] = None, api_version: Optional[str] = None):
+    def class_url(
+        cls,
+        engine: Optional[str] = None,
+        api_type: Optional[str] = None,
+        api_version: Optional[str] = None,
+    ):
         # Namespaces are separated in object names with periods (.) and in URLs
         # with forward slashes (/), so replace the former with the latter.
         base = cls.OBJECT_NAME.replace(".", "/")  # type: ignore
-        typed_api_type = ApiType.from_str(api_type) if api_type else ApiType.from_str(openai.api_type)
-        api_version = api_version or openai.api_version
+        typed_api_type, api_version = cls._get_api_type_and_version(
+            api_type, api_version)
 
-        if typed_api_type == ApiType.AZURE:
+        if typed_api_type in (ApiType.AZURE, ApiType.AZURE_AD):
             if not api_version:
-                raise error.InvalidRequestError("An API version is required for the Azure API type.")
+                raise error.InvalidRequestError(
+                    "An API version is required for the Azure API type."
+                )
             if engine is None:
                 raise error.InvalidRequestError(
                     "You must provide the deployment name in the 'engine' parameter to access the Azure OpenAI service"
                 )
             extn = quote_plus(engine)
-            return "/%s/%s/%ss?api-version=%s" % (cls.azure_api_prefix, extn, base, api_version)
+            return "/%s/%s/%s/%s?api-version=%s" % (
+                cls.azure_api_prefix,
+                cls.azure_deployments_prefix,
+                extn,
+                base,
+                api_version
+            )
 
         elif typed_api_type == ApiType.OPEN_AI:
             if engine is None:
-                return "/%ss" % (base)
+                return "/%s" % (base)
 
             extn = quote_plus(engine)
-            return "/engines/%s/%ss" % (extn, base)
+            return "/engines/%s/%s" % (extn, base)
 
         else:
-            raise error.InvalidAPIType('Unsupported API type %s' % api_type)
-
+            raise error.InvalidAPIType("Unsupported API type %s" % api_type)
 
     @classmethod
     def create(
@@ -63,6 +74,7 @@ class EngineAPIResource(APIResource):
         engine = params.pop("engine", None)
         timeout = params.pop("timeout", None)
         stream = params.get("stream", False)
+        headers = params.pop("headers", None)
         if engine is None and cls.engine_required:
             raise error.InvalidRequestError(
                 "Must provide an 'engine' parameter to create a %s" % cls, "engine"
@@ -87,11 +99,17 @@ class EngineAPIResource(APIResource):
         )
         url = cls.class_url(engine, api_type, api_version)
         response, _, api_key = requestor.request(
-            "post", url, params, stream=stream, request_id=request_id
+            "post",
+            url,
+            params=params,
+            headers=headers,
+            stream=stream,
+            request_id=request_id,
         )
 
         if stream:
-            assert not isinstance(response, OpenAIResponse)  # must be an iterator
+            # must be an iterator
+            assert not isinstance(response, OpenAIResponse)
             return (
                 util.convert_to_openai_object(
                     line,
@@ -127,23 +145,33 @@ class EngineAPIResource(APIResource):
                 "id",
             )
 
+        extn = quote_plus(id)
         params_connector = '?'
-        if self.typed_api_type == ApiType.AZURE:
+
+        if self.typed_api_type in (ApiType.AZURE, ApiType.AZURE_AD):
             api_version = self.api_version or openai.api_version
             if not api_version:
-                raise error.InvalidRequestError("An API version is required for the Azure API type.")
-            extn = quote_plus(id)
+                raise error.InvalidRequestError(
+                    "An API version is required for the Azure API type."
+                )
             base = self.OBJECT_NAME.replace(".", "/")
-            url = "/%s/%s/%ss/%s?api-version=%s" % (self.azure_api_prefix, self.engine, base, extn, api_version)
+            url = "/%s/%s/%s/%s/%s?api-version=%s" % (
+                self.azure_api_prefix,
+                self.azure_deployments_prefix,
+                self.engine,
+                base,
+                extn,
+                api_version
+            )
             params_connector = '&'
 
         elif self.typed_api_type == ApiType.OPEN_AI:
             base = self.class_url(self.engine, self.api_type, self.api_version)
-            extn = quote_plus(id)
             url = "%s/%s" % (base, extn)
 
         else:
-            raise error.InvalidAPIType('Unsupported API type %s' % self.api_type)
+            raise error.InvalidAPIType(
+                "Unsupported API type %s" % self.api_type)
 
         timeout = self.get("timeout")
         if timeout is not None:

@@ -1,4 +1,3 @@
-from email import header
 import json
 import platform
 import threading
@@ -62,7 +61,9 @@ def parse_stream(rbody):
     for line in rbody:
         if line:
             if line == b"data: [DONE]":
-                return
+                # return here will cause GeneratorExit exception in urllib3
+                # and it will close http connection with TCP Reset
+                continue
             if hasattr(line, "decode"):
                 line = line.decode("utf-8")
             if line.startswith("data: "):
@@ -71,10 +72,21 @@ def parse_stream(rbody):
 
 
 class APIRequestor:
-    def __init__(self, key=None, api_base=None, api_type=None, api_version=None, organization=None):
+    def __init__(
+        self,
+        key=None,
+        api_base=None,
+        api_type=None,
+        api_version=None,
+        organization=None,
+    ):
         self.api_base = api_base or openai.api_base
         self.api_key = key or util.default_api_key()
-        self.api_type = ApiType.from_str(api_type) if api_type else ApiType.from_str(openai.api_type)
+        self.api_type = (
+            ApiType.from_str(api_type)
+            if api_type
+            else ApiType.from_str(openai.api_type)
+        )
         self.api_version = api_version or openai.api_version
         self.organization = organization or openai.organization
 
@@ -100,8 +112,8 @@ class APIRequestor:
         result = self.request_raw(
             method.lower(),
             url,
-            params,
-            headers,
+            params=params,
+            supplied_headers=headers,
             files=files,
             stream=stream,
             request_id=request_id,
@@ -212,18 +224,41 @@ class APIRequestor:
 
         return headers
 
+    def _validate_headers(
+        self, supplied_headers: Optional[Dict[str, str]]
+    ) -> Dict[str, str]:
+        headers: Dict[str, str] = {}
+        if supplied_headers is None:
+            return headers
+
+        if not isinstance(supplied_headers, dict):
+            raise TypeError("Headers must be a dictionary")
+
+        for k, v in supplied_headers.items():
+            if not isinstance(k, str):
+                raise TypeError("Header keys must be strings")
+            if not isinstance(v, str):
+                raise TypeError("Header values must be strings")
+            headers[k] = v
+
+        # NOTE: It is possible to do more validation of the headers, but a request could always
+        # be made to the API manually with invalid headers, so we need to handle them server side.
+
+        return headers
+
     def request_raw(
         self,
         method,
         url,
+        *,
         params=None,
-        supplied_headers=None,
+        supplied_headers: Dict[str, str] = None,
         files=None,
-        stream=False,
+        stream: bool = False,
         request_id: Optional[str] = None,
     ) -> requests.Response:
         abs_url = "%s%s" % (self.api_base, url)
-        headers = {}
+        headers = self._validate_headers(supplied_headers)
 
         data = None
         if method == "get" or method == "delete":
@@ -246,8 +281,6 @@ class APIRequestor:
             )
 
         headers = self.request_headers(method, headers, request_id)
-        if supplied_headers is not None:
-            headers.update(supplied_headers)
 
         util.log_info("Request to OpenAI API", method=method, path=abs_url)
         util.log_debug("Post details", data=data, api_version=self.api_version)
@@ -301,9 +334,16 @@ class APIRequestor:
     def _interpret_response_line(
         self, rbody, rcode, rheaders, stream: bool
     ) -> OpenAIResponse:
+        # HTTP 204 response code does not have any content in the body.
+        if rcode == 204:
+            return OpenAIResponse(None, rheaders)
+
         if rcode == 503:
             raise error.ServiceUnavailableError(
-                "The server is overloaded or not ready yet.", rbody, rcode, headers=rheaders
+                "The server is overloaded or not ready yet.",
+                rbody,
+                rcode,
+                headers=rheaders,
             )
         try:
             if hasattr(rbody, "decode"):
